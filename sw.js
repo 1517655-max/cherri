@@ -1,10 +1,3 @@
-if (navigator.userAgent.includes("Firefox")) {
-	Object.defineProperty(globalThis, "crossOriginIsolated", {
-		value: true,
-		writable: false,
-	});
-}
-
 // s16 asked me to credit swium, so here you go. happy now?
 
 importScripts("/homework/math.all.js");
@@ -169,7 +162,10 @@ self.addEventListener("fetch", (event) => {
     	return;
   	}
 
-	event.respondWith(handleRequest(event));
+	event.respondWith(handleRequest(event).catch(() => new Response(
+    "The proxy could not load this page. The public relay or destination may be unavailable. Use the reconnect button to retry.",
+    { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } }
+  )));
 });
 
 self.addEventListener("message", ({ data }) => {

@@ -119,3 +119,11 @@ This repository was derived from [x8rr/cherri](https://github.com/x8rr/cherri). 
 
 ---
  
+
+## Changes in this fork
+
+This site was derived from [x8rr/cherri](https://github.com/x8rr/cherri), with the original project's attribution and AGPL license retained. The launch page was replaced with a responsive proxy entry page, and the standalone browser received working search submission, navigation history fixes, startup checks, reconnect controls, and connection information. Netlify hosting headers were added for browser isolation and the supplied WebAssembly proxy engine. The original site remains accessible at `/index.html?launch=1`.
+
+The browser defaults to the existing public Wisp relay at `wss://wisp.rhw.one/`. Netlify serves the supplied client assets; it does not host that relay. The public relay must be reachable from the visitor's network for browsing to work. Relay operators handle browsing traffic, and this setup does not guarantee anonymity or access through every network filter. Avoid sensitive logins through a public relay.
+
+To keep the deployment source archive below the CLI's 2 GiB file limit, byte-identical game and image assets were consolidated. The `_redirects` file preserves the removed duplicate paths through internal Netlify rewrites to the retained copies. Equivalent asset types were kept together so scripts, styles, and binary resources retain suitable content types. Local testing of those game URLs requires Netlify Dev to apply the rewrites.
