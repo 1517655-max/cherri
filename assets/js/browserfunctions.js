@@ -2,7 +2,12 @@ let aTab = 0;
 let tabCounter = 1;
 let bTabs = [];
 const connection = new BareMux.BareMuxConnection("/baremux/worker.js");
-const wispUrl = localStorage.getItem("cherri_wispUrl") || "wss://wisp.rhw.one/";
+const savedRelay = localStorage.getItem("cherri_wispUrl");
+let wispUrl = "wss://wisp.rhw.one/";
+try {
+  const relay = new URL(savedRelay || wispUrl);
+  if (relay.protocol === "wss:" && !relay.username && !relay.password) wispUrl = relay.href;
+} catch (_) { /* Fall back to the existing encrypted public relay. */ }
 const bareUrl = "https://useclassplay.vercel.app/fq/";
 
 let searchE;
@@ -22,7 +27,7 @@ if (se === "DuckDuckGo") {
   searchE = "https://search.brave.com/search?q=";
 }
 
-connection.setTransport("/libcurl/index.mjs", [{ websocket: wispUrl }]);
+const transportReady = connection.setTransport("/libcurl/index.mjs", [{ websocket: wispUrl }]);
 
 const CONFIG = {
   files: {
@@ -36,7 +41,10 @@ const { ScramjetController } = $scramjetLoadController();
 const scramjet = new ScramjetController({
   files: CONFIG.files,
 });
-scramjet.init();
+const engineReady = scramjet.init();
+// Startup errors are reported by the browser UI; avoid unhandled rejections on legacy pages.
+transportReady.catch(() => {});
+engineReady.catch(() => {});
 
 function newTab() {
   const tabCont = document.querySelector(".tabs");
@@ -61,8 +69,17 @@ function newTab() {
             <span>
                 New Tab
             </span>
-        <i class="fas fa-times close-btn"></i>
+        <button type="button" class="close-btn" aria-label="Close tab">×</button>
         `;
+
+  tabElement.setAttribute("role", "button");
+  tabElement.tabIndex = 0;
+  tabElement.addEventListener("keydown", (e) => {
+    if (e.target === tabElement && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      switchTab(nTab.id);
+    }
+  });
 
   tabElement.addEventListener("click", (e) => {
     if (!e.target.closest(".close-btn")) {
@@ -82,6 +99,7 @@ function newTab() {
   tabFrame.classList.add("viewframe", "browser-frame");
   tabFrame.dataset.frameId = nTab.id;
   tabFrame.setAttribute("allowfullscreen", "true");
+  tabFrame.title = "Browser tab";
   tabFrame.src = "/newtab.html";
 
   document.body.appendChild(tabFrame);
@@ -132,8 +150,7 @@ function closeTab(tId) {
   }
 }
 
-function nav(i) {
-  console.log("e");
+async function nav(i) {
   if (!i.trim()) return;
 
   let url = i.trim();
@@ -146,14 +163,27 @@ function nav(i) {
     }
   }
 
+  try {
+    const destination = new URL(url);
+    if (!["https:", "http:"].includes(destination.protocol) || destination.username || destination.password) {
+      throw new Error("unsupported destination");
+    }
+    url = destination.href;
+  } catch (_) {
+    showToast("error", "Enter an HTTP or HTTPS website, or a search query.");
+    return;
+  }
+
   const cTab = bTabs.find((t) => t.id === aTab);
   if (!cTab) return;
 
+  cTab.history.splice(cTab.historyIndex + 1);
   cTab.history.push(url);
   cTab.historyIndex++;
 
   cTab.url = url;
 
+  let fUrl;
   if (
     localStorage.getItem("cherri_backend") === "Scramjet" ||
     localStorage.getItem("cherri_backend") === "scramjet" ||
@@ -171,7 +201,8 @@ function nav(i) {
 
 function updateUrlFromIframe(viewframe) {
   try {
-    const cTab = bTabs.find((t) => t.id === aTab);
+    const frameId = Number(viewframe.dataset.frameId);
+    const cTab = bTabs.find((t) => t.id === frameId);
     if (!cTab) return;
 
     let decodedUrl;
@@ -189,11 +220,11 @@ function updateUrlFromIframe(viewframe) {
       cTab.url = decodedUrl;
 
       const ubar = document.getElementById("searchbar");
-      if (ubar) ubar.value = decodedUrl;
+      if (ubar && aTab === cTab.id) ubar.value = decodedUrl;
 
-      const favEl = document.querySelector(`#fav[data-fav-id="${aTab}"]`);
+      const favEl = document.querySelector(`#fav[data-fav-id="${cTab.id}"]`);
       if (favEl)
-        favEl.src = `https://www.google.com/s2/favicons?domain=${decodedUrl}&sz=256`;
+        favEl.src = "/assets/img/fav.png";
     }
   } catch (e) {
     console.error("Error updating URL from iframe:", e);
@@ -201,11 +232,17 @@ function updateUrlFromIframe(viewframe) {
 }
 
 async function go(u) {
-  if (!(await connection.getTransport())) {
-    connection.setTransport("/libcurl/index.mjs", [{ websocket: wispUrl }]);
+  try {
+    await (window.proxyReady || Promise.all([transportReady, engineReady]));
+    if (!(await connection.getTransport())) {
+      await connection.setTransport("/libcurl/index.mjs", [{ websocket: wispUrl }]);
+    }
+  } catch (_) {
+    showToast("error", "Browser setup failed. Try reconnecting or reloading this page.");
+    return;
   }
 
-  console.log("a");
+
   const cTab = bTabs.find((t) => t.id === aTab);
   const favEl = document.querySelector(`#fav[data-fav-id="${aTab}"]`);
   const viewframe = document.querySelector(
@@ -222,21 +259,17 @@ async function go(u) {
   }
 
   if (ubar) ubar.value = cTab.url;
-  const favUrl = cTab.url;
   if (favEl)
-    favEl.src = `https://www.google.com/s2/favicons?domain=${favUrl}&sz=256`;
+    favEl.src = "/assets/img/fav.png";
 
   try {
-    viewframe.src = u;
-    console.log("ooooo");
-
     viewframe.onload = () => {
       try {
         const iframeDoc =
           viewframe.contentDocument || viewframe.contentWindow.document;
         const title = iframeDoc.title || new URL(cTab.url).hostname;
 
-        const tabEl = document.querySelector(`.tab[data-tab-id="${aTab}"]`);
+        const tabEl = document.querySelector(`.tab[data-tab-id="${cTab.id}"]`);
         if (tabEl) {
           const titleEl = tabEl.querySelector("span");
           if (titleEl) titleEl.textContent = title;
@@ -245,7 +278,7 @@ async function go(u) {
         updateUrlFromIframe(viewframe);
       } catch (e) {
         console.error("Error accessing iframe content:", e);
-        const tabEl = document.querySelector(`.tab[data-tab-id="${aTab}"]`);
+        const tabEl = document.querySelector(`.tab[data-tab-id="${cTab.id}"]`);
         if (tabEl) {
           const titleEl = tabEl.querySelector("span");
           if (titleEl) titleEl.textContent = new URL(cTab.url).hostname;
@@ -254,6 +287,7 @@ async function go(u) {
         updateUrlFromIframe(viewframe);
       }
     };
+    viewframe.src = u;
   } catch (e) {
     console.error("There was an error while loading the page:", e);
     showToast(
@@ -272,7 +306,7 @@ function b() {
   const u = cTab.history[cTab.historyIndex];
   cTab.url = u;
   let furl;
-  const ba = localStorage.getItem("cherri_backend");
+  const ba = localStorage.getItem("cherri_backend") || "Scramjet";
   if (ba.toLowerCase() === "scramjet") {
     furl = scramjet.encodeUrl(u);
   } else if (ba.toLowerCase() === "ultraviolet") {
@@ -286,12 +320,13 @@ function b() {
 
 function f() {
   const cTab = bTabs.find((t) => t.id === aTab);
+  if (!cTab || cTab.historyIndex >= cTab.history.length - 1) return;
 
   cTab.historyIndex++;
   const u = cTab.history[cTab.historyIndex];
   cTab.url = u;
   let furl;
-  const ba = localStorage.getItem("cherri_backend");
+  const ba = localStorage.getItem("cherri_backend") || "Scramjet";
   if (ba.toLowerCase() === "scramjet") {
     furl = scramjet.encodeUrl(u);
   } else if (ba.toLowerCase() === "ultraviolet") {
